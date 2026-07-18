@@ -1,0 +1,72 @@
+name: DevOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Grant the pipeline permissions to write packages to GitHub Container Registry
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  code-quality:
+    name: Lint & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install CI Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 safety
+
+    - name: Run Code Linter (Flake8)
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  build-and-publish:
+    name: Build & Publish Container
+    needs: code-quality
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' # Only publish on actual merges to main
+
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Extract Metadata for Docker (Naming/Tagging)
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          type=raw,value=latest
+          type=sha,format=short
+
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: true # The cloud runner builds AND uploads the container live!
+        tags: ${{ id.meta.outputs.tags }}
+        labels: ${{ id.meta.outputs.labels }}
